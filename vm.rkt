@@ -50,7 +50,7 @@
 (struct BC ([address : Register] [condition : Condition] [value : Register]) #:transparent)
 
 (define-syntax-rule (binary-num-op op)
-  (struct op ([integer? : Boolean] [in0 : Input] [in2 : Input]) #:transparent))
+  (struct op ([integer? : Boolean] [target : Register] [in0 : Register] [in2 : Register]) #:transparent))
 
 (define-syntax-rule (binary-num-ops op ...)
   (begin (binary-num-op op) ...))
@@ -58,7 +58,7 @@
 (binary-num-ops ADD SUB MUL DIV)
 
 (define-syntax-rule (binary-bool-op op)
-  (struct op ([in0 : Opin] [in2 : Opin]) #:transparent))
+  (struct op ([target : Register] [in0 : Register] [in2 : Register]) #:transparent))
 
 (define-syntax-rule (binary-bool-ops op ...)
   (begin (binary-bool-op op) ...))
@@ -75,6 +75,9 @@
 (define get-id (make-getter 64 61))
 (define set-id (make-setter 64 61))
 
+(define-syntax-rule (opcode op code)
+  [code (op instruction)])
+
 (: decode-instruction (-> Integer Instruction))
 (define (decode-instruction instruction)
   (match (get-id instruction)
@@ -84,6 +87,14 @@
     [#b100 (decode-branch instruction)]
     [#b101 (RET)]
     [#b111 (decode-conditional-branch instruction)]
+    [#b1000 (decode-add instruction)]
+    [#b1001 (decode-sub instruction)]
+    [#b1010 (decode-mul instruction)]
+    [#b1011 (decode-div instruction)]
+    [#b1100 (decode-or instruction)]
+    [#b1101 (decode-and instruction)]
+    [#b1110 (decode-not instruction)]
+    [#b1111 (IO)]
     [id (error 'parse-instruction "Instruction Id ~s not recognized" id)]))
 
 (: encode-instruction (-> Instruction Integer))
@@ -95,7 +106,15 @@
     [(struct STR _) (encode-store instruction)]
     [(struct B _) (encode-branch instruction)]
     [(struct RET _) (set-id #b101 0)]
-    [(struct BC _) (encode-conditional-branch instruction)]))
+    [(struct BC _) (encode-conditional-branch instruction)]
+    [(strcut ADD _) (encode-add instruction)]
+    [(strcut SUB _) (encode-sub instruction)]
+    [(strcut MUL _) (encode-mul instruction)]
+    [(strcut DIV _) (encode-div instruction)]
+    [(strcut OR _) (encode-or instruction)]
+    [(strcut AND _) (encode-and instruction)]
+    [(strcut NOT _) (encode-not instruction)]
+    [(struct IO _) (set-id #b1111 0)]))s
 
 (define-syntax with-getters
   (syntax-rules (< : > = )
