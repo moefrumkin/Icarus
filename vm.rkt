@@ -151,7 +151,9 @@
     [#b1010 'mul]
     [#b1011 'div]))
 
-(struct BNO ([type : BNO-TYPE] [float? : Boolean] [target : Register] [in0 : Register] [in2 : Register]) #:transparent)
+(define-type OpIn Register)
+
+(struct BNO ([type : BNO-TYPE] [float? : Boolean] [target : Register] [in0 : OpIn] [in2 : OpIn]) #:transparent)
 
 (define-type BBO-TYPE (U 'or 'and))
 
