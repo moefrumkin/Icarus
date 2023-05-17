@@ -2,6 +2,8 @@
 
 (require typed/rackunit)
 
+(provide VM Instruction upper-half lower-half HCF LDC LDR STR B BC BNO BBO NOT IO VM-registers)
+
 (struct None () #:transparent)
 (struct (a) Some ([value : a]) #:transparent)
  
@@ -44,6 +46,9 @@
       (bitwise-ior
        (bitwise-and (bitwise-not mask) value)
        (bitwise-and mask (arithmetic-shift field-value start))))))
+
+(define lower-half (make-getter 31 0))
+(define upper-half (make-getter 64 32))
 
 (struct VM ([registers : (Vectorof Integer)] [memory : (Vectorof Integer)] [io : (-> VM Void)]))
 
@@ -355,7 +360,7 @@
 
 (check-encoding? (IO))
 
-(: vec (Vectorof Integer))
+#|(: vec (Vectorof Integer))
 (define vec (make-vector 1000))
 (vector-set! vec 0 (encode-instruction (LDC 0 #f 1)))
 (vector-set! vec 1 (encode-instruction (LDC 1 #f 5)))
@@ -372,4 +377,4 @@
 
 (define machine (VM (make-vector 8) vec io))
 
-(run machine 0 void)
+(run machine 0 void)|#
