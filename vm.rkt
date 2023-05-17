@@ -2,7 +2,7 @@
 
 (require typed/rackunit)
 
-(provide VM Instruction upper-half lower-half HCF LDC LDR STR B BC BNO BBO NOT IO VM-registers)
+(provide (all-defined-out))
 
 (struct None () #:transparent)
 (struct (a) Some ([value : a]) #:transparent)
@@ -49,6 +49,8 @@
 
 (define lower-half (make-getter 31 0))
 (define upper-half (make-getter 64 32))
+(define set-lower-half (make-setter 31 0))
+(define set-upper-half (make-setter 64 32))
 
 (struct VM ([registers : (Vectorof Integer)] [memory : (Vectorof Integer)] [io : (-> VM Void)]))
 
@@ -62,14 +64,18 @@
     [(HCF) (then vm)]
     [(LDC target upper-half? value) (vector-set! registers
                                                  target
-                                                 (if upper-half?
-                                                     (arithmetic-shift value 32)
-                                                     value))
+                                                 ((if upper-half?
+                                                     set-upper-half
+                                                     set-lower-half)
+                                                  value
+                                                  (vector-ref registers target)))
                                     (run*)]
-    [(LDR target source) (vector-set! registers target (vector-ref memory source))
+    [(LDR target source) (vector-set! registers target
+                                      (vector-ref memory
+                                                  (vector-ref registers source)))
                          (run*)]
     [(STR target source) (vector-set! memory (vector-ref registers target)
-                                      (vector-ref memory (vector-ref registers source)))
+                                      (vector-ref registers source))
                          (run*)]
     [(B address link?) (if-present link? (λ ([register : Register])
                                           (vector-set! registers register pc)))
@@ -334,6 +340,20 @@
 (define-syntax-rule (check-encoding? instruction)
   (check-equal? (decode-instruction (encode-instruction instruction)) instruction))
 
+(: write-vec! (All (a) (-> (Vectorof a) (Listof a) Integer Void)))
+(define (write-vec! vec loa pos)
+  (when (cons? loa)
+      (vector-set! vec pos (first loa))
+    (write-vec! vec (rest loa) (add1 pos))))
+
+(: load-program! (-> VM (Listof Instruction) Void))
+(define (load-program! vm program)
+  (write-vec! (VM-memory vm) (map encode-instruction program) 0))
+
+(: set-sp! (-> VM Integer Void))
+(define (set-sp! vm value)
+  (vector-set! (VM-registers vm) 7 value))
+
 (check-encoding? (HCF))
 
 (check-encoding? (LDR 4 3))
@@ -360,21 +380,29 @@
 
 (check-encoding? (IO))
 
-#|(: vec (Vectorof Integer))
-(define vec (make-vector 1000))
-(vector-set! vec 0 (encode-instruction (LDC 0 #f 1)))
-(vector-set! vec 1 (encode-instruction (LDC 1 #f 5)))
-(vector-set! vec 2 (encode-instruction (LDC 2 #f 1)))
-(vector-set! vec 3 (encode-instruction (LDC 3 #f 4)))
-(vector-set! vec 4 (encode-instruction (BNO 'mul #f 0 0 1)))
-(vector-set! vec 5 (encode-instruction (BNO 'sub #f 1 1 2)))
-(vector-set! vec 6 (encode-instruction (BC 3 'non-zero 1)))
-(vector-set! vec 7 (encode-instruction (IO)))
+(: factorial (Listof Instruction))
+(define factorial (list (LDC 0 #f 1)
+                        (LDC 1 #f 5)
+                        (LDC 2 #f 1)
+                        (LDC 3 #f 4)
+                        (BNO 'mul #f 0 0 1)
+                        (BNO 'sub #f 1 1 2)))
 
 (: io (-> VM Void))
 (define (io vm)
   (print (VM-registers vm)))
 
-(define machine (VM (make-vector 8) vec io))
+(: reg0 (-> VM Integer))
+(define (reg0 vm)
+  (vector-ref (VM-registers vm) 0))
 
-(run machine 0 void)|#
+(: debugger (-> VM Integer))
+(define (debugger vm)
+  (print (VM-registers vm))
+  (print (VM-memory vm))
+  (vector-ref (VM-registers vm) 0))
+
+(define machine (VM (make-vector 8) (make-vector 1000) io))
+
+(load-program! machine factorial)
+(check-equal? (run machine 0 reg0) 5)

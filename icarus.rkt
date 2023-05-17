@@ -7,10 +7,12 @@
        <ICARUS> ::= <num|#
 
 (struct Num ([value : Integer]) #:transparent)
+(struct PrimOp ([type : BNO-TYPE] [in0 : Icarus] [in1 : Icarus]) #:transparent)
 (struct Id ([name : Symbol]) #:transparent)
+(struct Binding ([name : (Listof Symbol)] [values : (Listof Icarus)] [body : Icarus]) #:transparent)
 (struct Call ([name : Symbol] [args : (Listof Icarus)]) #:transparent)
 
-(define-type Icarus (U Num Id Call))
+(define-type Icarus (U Num PrimOp Id Binding Call))
 
 (: parse (-> String Icarus))
 
@@ -22,25 +24,54 @@
   (match sexpr
     [(? integer?) (Num (exact-round sexpr))]
     [(? symbol?) (Id sexpr)]
+    [(list op in0 in1)
+     #:when (member op '(+ - * /))
+     (PrimOp (symbol->bno-type op) (parse-sexpr in0) (parse-sexpr in1))]
+    [(list 'let (list (list name value) ...) body)
+     #:when (andmap symbol? name)
+     (Binding name (map parse-sexpr value) (parse-sexpr body))]
     [(list name args ...)
      #:when (symbol? name)
      (Call name (map parse-sexpr args))]))
+
+(: symbol->bno-type (-> Symbol BNO-TYPE))
+(define (symbol->bno-type symbol)
+  (match symbol
+    ['+ 'add]
+    ['- 'sub]
+    ['* 'mul]
+    ['/ 'div]))
 
 (: string->sexpr (-> String Any))
 (define (string->sexpr string)
   (read (open-input-string string)))
 
-;; test parsing
-(check-equal? (parse "17") (Num 17))
-(check-equal? (parse "(+ 1 (- 3 2))") (Call '+ (list (Num 1) (Call '- (list (Num 3) (Num 2))))))
+(struct Frame ([values : (Listof Symbol)] [parent : (Optional Frame)]) #:transparent)
+(: empty-frame Frame)
+(define empty-frame (Frame '() none))
 
-(struct Binding ([name : Symbol] [offset : Natural]) #:transparent)
-(struct Frame ([values : (Listof Binding)]) #:transparent)
+(: extend-frame (-> Frame (Listof Symbol) Frame))
+(define (extend-frame frame names)
+  (Frame (append (Frame-values frame) names) (Frame-parent frame)))
 
-(: compile (-> Icarus (Listof Instruction)))
-(define (compile expression)
+(: lookup (-> Frame Symbol Integer))
+(define (lookup frame symbol)
+  (let ([idx (index-of (Frame-values frame) symbol)])
+    (if (integer? idx) idx (error "unbound identifier"))))
+
+(: compile (-> Icarus Integer Frame (Listof Instruction)))
+(define (compile expression target frame)
+  (: compile* (-> Icarus Integer (Listof Instruction)))
+  (define (compile* expression target)
+    (compile expression target frame))
   (match expression
-    [(Num n) (generate-load 0 n)]))
+    [(Num n) (generate-load target n)]
+    [(Id s) (pop target (lookup frame s))]
+    [(PrimOp type in0 in1) (append (compile* in0 0) (compile* in1 1) (list (BNO type #f 0 0 1)))]
+    [(Binding names values body)
+     (append
+      (save-bindings frame values 0)
+      (compile body target (extend-frame frame names)))]))
 
 
 (: generate-load (-> Integer Integer (Listof Instruction)))
@@ -51,6 +82,57 @@
       (LDC register #f lower)
       (LDC register #t upper))))
 
-(: reg0 (-> VM Integer))
-(define (reg0 vm)
-  (vector-ref (VM-registers vm) 0))
+(: push (-> Integer Integer (Listof Instruction)))
+(define (push register offset)
+  (append (generate-load 6 offset)
+          (list (BNO 'add #f 6 6 7)
+                (STR 6 register))))
+
+(: pop (-> Integer Integer (Listof Instruction)))
+(define (pop register offset)
+  (append (generate-load 6 offset)
+          (list (BNO 'add #f 6 6 7)
+                (LDR register 6))))
+
+(: save-bindings (-> Frame (Listof Icarus) Integer (Listof Instruction)))
+(define (save-bindings frame values offset)
+  (if (empty? values) '()
+      (append (save-binding frame (first values) offset)
+              (save-bindings frame (rest values) (add1 offset)))))
+
+(: save-binding (-> Frame Icarus Integer (Listof Instruction)))
+(define (save-binding frame value offset)
+  (append (compile value 0 frame)
+          (push 0 offset)))
+
+(: evaluate (-> String Integer))
+(define (evaluate string)
+  (letrec ([program (compile (parse string) 0 empty-frame)]
+           [vm (VM (make-vector 8) (make-vector 1000) void)])
+    (load-program! vm program)
+    (set-sp! vm 500)
+    (run vm 0 reg0)))
+
+(: debug (-> String Integer))
+(define (debug string)
+  (letrec ([program (compile (parse string) 0 empty-frame)]
+           [vm (VM (make-vector 8) (make-vector 64) void)])
+    (load-program! vm program)
+    (set-sp! vm 32)
+    (run vm 0 debugger)))
+
+;; test parsing
+(check-equal? (parse "17") (Num 17))
+(check-equal? (parse "(+ 1 (- 3 2))") (PrimOp 'add (Num 1) (PrimOp 'sub (Num 3) (Num 2))))
+
+;;test evaluation
+(check-equal? (evaluate "17") 17)
+(check-equal? (evaluate "(+ 1 1)") 2)
+(check-equal? (evaluate "(+ (- 7 5) (* (/ 6 3) 2))") 6)
+;;(check-equal? (evaluate "(* 5 (- 36 6))") 150)
+(check-equal? (evaluate "(let ((x 5)) x)") 5)
+(check-equal? (evaluate "(let ([x 5] [y 9]) (* y x))") 45)
+
+
+;;umm
+;;(check-equal? (evaluate "(let ((x 5) (y 6) (z 36)) (+ 2 (/ z y)))") 30)
