@@ -7,7 +7,7 @@
        <ICARUS> ::= <num|#
 
 (struct Num ([value : Integer]) #:transparent)
-(struct PrimOp ([type : BNO-TYPE] [in0 : Icarus] [in1 : Icarus]) #:transparent)
+(struct PrimOp ([type : BNO-TYPE] [head : Icarus] [tail : (Listof Icarus)]) #:transparent)
 (struct Id ([name : Symbol]) #:transparent)
 (struct Binding ([name : (Listof Symbol)] [values : (Listof Icarus)] [body : Icarus]) #:transparent)
 (struct Call ([name : Symbol] [args : (Listof Icarus)]) #:transparent)
@@ -24,9 +24,11 @@
   (match sexpr
     [(? integer?) (Num (exact-round sexpr))]
     [(? symbol?) (Id sexpr)]
-    [(list op in0 in1)
+    [(list op head tail ...)
      #:when (member op '(+ - * /))
-     (PrimOp (symbol->bno-type op) (parse-sexpr in0) (parse-sexpr in1))]
+     (PrimOp (symbol->bno-type op)
+             (parse-sexpr head)
+             (map parse-sexpr tail))]
     [(list 'let (list (list name value) ...) body)
      #:when (andmap symbol? name)
      (Binding name (map parse-sexpr value) (parse-sexpr body))]
@@ -116,7 +118,6 @@
                            (push register)
                            (compile frame register)
                            (pop register))])
-          (print frame)
           (free-register! frame register)
           program))))
   
@@ -137,12 +138,17 @@
   (match expression
     [(Num n) (generate-load target n)]
     [(Id s) (peek-back target (lookup frame s))]
-    [(PrimOp type in0 in1)
+    [(PrimOp type head tail)
      (wrap-reserve frame
-                   (lambda (frame register)
-                     (append (compile-unit in0 target frame)
-                             (compile-unit in1 register frame)
-                             (list (BNO type #f target target register)))))] ;; this is bad
+                   (lambda (frame scratch)
+                     (append (compile-unit head target frame)
+                             (foldl (lambda ([icarus : Icarus] [prog : (Listof Instruction)])
+                                      (append
+                                       prog
+                                       (compile-unit icarus scratch frame)
+                                       (list (BNO type #f target target scratch))))
+                                    '()
+                                    tail))))]
     [(Binding names values body)
      (append
       (save-bindings frame values)
@@ -166,8 +172,8 @@
 (: pop (-> Register (Listof Instruction)))
 (define (pop register)
   (append (generate-load sp-scratch 1)
-          (list (BNO 'sub #f stack-pointer stack-pointer 1)
-                (LDR register stack-pointer))))
+          (list (LDR register stack-pointer)
+                (BNO 'sub #f stack-pointer stack-pointer sp-scratch))))
 
 (: peek-back (-> Register Integer (Listof Instruction)))
 (define (peek-back register offset)
@@ -209,7 +215,8 @@
 
 ;; test parsing
 (check-equal? (parse "17") (Num 17))
-(check-equal? (parse "(+ 1 (- 3 2))") (PrimOp 'add (Num 1) (PrimOp 'sub (Num 3) (Num 2))))
+(check-equal? (parse "(+ 1 (- 3 2))")
+              (PrimOp 'add (Num 1) (list (PrimOp 'sub (Num 3) (list (Num 2))))))
 
 ;;test expressions
 (check-equal? (evaluate "17") 17)
@@ -218,6 +225,12 @@
 (check-equal? (evaluate "(- 36 6)") 30)
 (check-equal? (evaluate "(* 5 (- 36 6))") 150)
 (check-equal? (evaluate "(+ 5 (/ 36 6))") 11)
+
+;;test n-ary operations
+(check-equal? (evaluate "(+ 1 2 3 4 5 6 7)") 28)
+(check-equal? (evaluate "(+ 10 20 30 40 50 60 70 80 90 100)") 550)
+(check-equal? (evaluate "(/ 144 3 4)") 12)
+(check-equal? (evaluate "(* 1 2 3 4 5 6)") 720)
 
 ;;test let
 (check-equal? (evaluate "(let ((x 5)) x)") 5)
@@ -232,4 +245,4 @@
 ;;test register allocation
 #;(check-equal? (evaluate
               "(let ([a 1] [b 2] [c 3] [d 4] [e 5] [f 6] [g 8] [h 9])
-                (+ a (+ b (+ c (+ d (+ e (+ f (+ g h))))))))") 55)
+                (+ a b c d e f g h))") 45)
