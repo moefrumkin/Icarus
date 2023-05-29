@@ -54,13 +54,15 @@
 
 (struct VM ([registers : (Vectorof Integer)] [memory : (Vectorof Integer)] [io : (-> VM Void)]))
 
-(: run (All (a) (-> VM Integer (-> VM a) a)))
+(: run (All (a) (-> VM Integer (-> VM a) (-> VM Instruction Void) a)))
 
-(define (run vm pc then)
-  (define (run*) (run vm (add1 pc) then))
+(define (run vm pc then debugger)
+  (define (run*) (run vm (add1 pc) then debugger))
   (define registers (VM-registers vm))
   (define memory (VM-memory vm))
-  (match (decode-instruction (vector-ref (VM-memory vm) pc))
+  (define instruction (decode-instruction (vector-ref (VM-memory vm) pc)))
+  (debugger vm instruction)
+  (match instruction
     [(HCF) (then vm)]
     [(LDC target upper-half? value) (vector-set! registers
                                                  target
@@ -79,9 +81,9 @@
                          (run*)]
     [(B address link?) (if-present link? (λ ([register : Register])
                                           (vector-set! registers register pc)))
-                       (run vm (vector-ref registers address) then)]
+                       (run vm (vector-ref registers address) then debugger)]
     [(BC address condition value) (if (holds? condition (vector-ref registers value))
-                                             (run vm (vector-ref registers address) then)
+                                             (run vm (vector-ref registers address) then debugger)
                                              (run*))]
     [(BNO type float? target in0 in1)
      (vector-set! registers target ((bno-type->function type)
@@ -396,13 +398,13 @@
 (define (reg0 vm)
   (vector-ref (VM-registers vm) 0))
 
-(: debugger (-> VM Integer))
-(define (debugger vm)
-  (print (VM-registers vm))
-  (print (VM-memory vm))
-  (vector-ref (VM-registers vm) 0))
+(: print-regs (-> VM Instruction Void))
+(define (print-regs vm instruction)
+  (print instruction)
+  (display ": ")
+  (displayln (VM-registers vm)))
 
 (define machine (VM (make-vector 8) (make-vector 1000) io))
 
 (load-program! machine factorial)
-(check-equal? (run machine 0 reg0) 5)
+(check-equal? (run machine 0 reg0 void) 5)
