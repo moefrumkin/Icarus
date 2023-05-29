@@ -53,8 +53,13 @@
 (define stack-pointer 7)
 (define sp-scratch 6)
 
-(: empty-frame Frame)
-(define empty-frame (Frame (make-vector 6 #f) (list #f) none))
+;; is the register reserved by the compiler for a specific role?
+(: forbidden? (-> Register Boolean))
+(define (forbidden? register)
+  (or (= register stack-pointer) (= register sp-scratch)))
+
+(: make-empty-frame (-> Frame))
+(define (make-empty-frame) (Frame (vector #t #f #f #f #f #f #t #t) (list #f) none))
 
 (: extend-frame (-> Frame (Listof Symbol) Frame))
 (define (extend-frame frame names)
@@ -62,6 +67,7 @@
          (append names (Frame-stack frame))
          (Frame-parent frame)))
 
+;; searches for an empty register and reserve it if one exists. Otherwise returns false.
 (: search-and-reserve! (-> Frame (U Register #f)))
 (define (search-and-reserve! frame)
   (let ([register (search-register frame)])
@@ -70,7 +76,13 @@
      
 (: search-register (-> Frame (U Register #f)))
 (define (search-register frame)
-  (vector-member #f (Frame-registers frame)))
+  (: search-register (-> Integer (Vectorof Boolean) (U Register #f)))
+  (define (search-register idx registers)
+    (if (= idx (vector-length registers)) #f
+        (if (vector-ref registers idx)
+            (search-register (add1 idx) registers)
+            idx)))
+  (search-register 0 (Frame-registers frame)))
 
 (: reserve-register! (-> Frame Register Void))
 (define (reserve-register! frame register)
@@ -79,17 +91,43 @@
 (: free-register! (-> Frame Register Void))
 (define (free-register! frame register)
   (vector-set! (Frame-registers frame) register #f))
+
+(: reserve-next-free! (-> Frame Register Register))
+(define (reserve-next-free! frame start)
+  (let ([register (next-free-register start)])
+    (reserve-register! frame register)
+    register))
+
+(: next-free-register (-> Register Register))
+(define (next-free-register current)
+  (let ([next (modulo (add1 current) 7)])
+    (if (forbidden? next)
+        (next-free-register next)
+        next)))
+
+;;wraps a compil lambda witha  procedure guaranteeting a free register
+(: wrap-reserve (-> Frame (-> Frame Register (Listof Instruction)) (Listof Instruction)))
+(define (wrap-reserve frame compile)
+  (let ([register (search-and-reserve! frame)])
+    (if register
+        (compile frame register)
+        (letrec ([register (reserve-next-free! frame 0)]
+                 [program (append
+                           (push register)
+                           (compile frame register)
+                           (pop register))])
+          (print frame)
+          (free-register! frame register)
+          program))))
   
 (: lookup (-> Frame Symbol Integer))
 (define (lookup frame symbol)
   (let ([idx (index-of (Frame-stack frame) symbol)])
     (if (integer? idx) idx (error "unbound identifier"))))
 
-(: compile (-> Icarus (Listof Instruction)))
+(: compile (-> String (Listof Instruction)))
 (define (compile program)
-  (append
-   (push stack-pointer)
-   (compile-unit program 0 empty-frame)))
+  (compile-unit (parse program) 0 (make-empty-frame)))
 
 (: compile-unit (-> Icarus Integer Frame (Listof Instruction)))
 (define (compile-unit expression target frame)
@@ -100,15 +138,17 @@
     [(Num n) (generate-load target n)]
     [(Id s) (peek-back target (lookup frame s))]
     [(PrimOp type in0 in1)
-     (append (compile-unit* in0 target)
-             (compile-unit* in1 (add1 target))
-             (list (BNO type #f target target (add1 target))))] ;; this is bad
+     (wrap-reserve frame
+                   (lambda (frame register)
+                     (append (compile-unit in0 target frame)
+                             (compile-unit in1 register frame)
+                             (list (BNO type #f target target register)))))] ;; this is bad
     [(Binding names values body)
      (append
-      (save-bindings frame values 0)
+      (save-bindings frame values)
       (compile-unit body target (extend-frame frame names)))]))
 
-
+;;loads a constant into a register
 (: generate-load (-> Integer Integer (Listof Instruction)))
 (define (generate-load register n)
   (let ([lower (lower-half n)]
@@ -137,22 +177,22 @@
     (BNO 'sub #f sp-scratch stack-pointer sp-scratch)
     (LDR register sp-scratch))))
 
-(: save-bindings (-> Frame (Listof Icarus) Integer (Listof Instruction)))
-(define (save-bindings frame values offset)
+(: save-bindings (-> Frame (Listof Icarus) (Listof Instruction)))
+(define (save-bindings frame values)
   (if (empty? values) '()
       (append
-       (save-bindings frame (rest values) (add1 offset))
-       (save-binding frame (first values) offset))))
+       (save-bindings frame (rest values))
+       (save-binding frame (first values)))))
 
 ;; warning: doesn't respect register allocation
-(: save-binding (-> Frame Icarus Integer (Listof Instruction)))
-(define (save-binding frame value offset)
+(: save-binding (-> Frame Icarus (Listof Instruction)))
+(define (save-binding frame value)
   (append (compile-unit value 0 frame)
           (push 0)))
 
 (: evaluate (-> String Integer))
 (define (evaluate string)
-  (letrec ([program (compile-unit (parse string) 0 empty-frame)]
+  (letrec ([program (compile string)]
            [vm (VM (make-vector 8) (make-vector 1000) void)])
     (load-program! vm program)
     (set-sp! vm 500)
@@ -160,7 +200,7 @@
 
 (: debug (-> String Integer))
 (define (debug string)
-  (letrec ([program (compile-unit (parse string) 0 empty-frame)]
+  (letrec ([program (compile-unit (parse string) 0 (make-empty-frame))]
            [vm (VM (make-vector 8) (make-vector 1000) void)])
     (load-program! vm program)
     (set-sp! vm 500)
@@ -187,3 +227,8 @@
 ;;test nesting
 (check-equal? (evaluate "(let ([x 5]) (let ([y 45]) (/ y x)))") 9)
 (check-equal? (evaluate "(let ([x 5]) (let ([y 45]) (let ([z (/ y x)]) (* 2 z))))") 18)
+
+;;test register allocation
+#;(check-equal? (evaluate
+              "(let ([a 1] [b 2] [c 3] [d 4] [e 5] [f 6] [g 8] [h 9])
+                (+ a (+ b (+ c (+ d (+ e (+ f (+ g h))))))))") 55)
