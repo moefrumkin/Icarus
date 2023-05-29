@@ -184,11 +184,12 @@
        (save-bindings frame (rest values))
        (save-binding frame (first values)))))
 
-;; warning: doesn't respect register allocation
+;; pushes a binding's value to the stack
 (: save-binding (-> Frame Icarus (Listof Instruction)))
 (define (save-binding frame value)
-  (append (compile-unit value 0 frame)
-          (push 0)))
+  (wrap-reserve frame (lambda (frame register)
+                  (append (compile-unit value register frame)
+                          (push register)))))
 
 (: evaluate (-> String Integer))
 (define (evaluate string)
