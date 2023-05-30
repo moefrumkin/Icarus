@@ -243,6 +243,6 @@
 (check-equal? (evaluate "(let ([x 5]) (let ([y 45]) (let ([z (/ y x)]) (* 2 z))))") 18)
 
 ;;test register allocation
-#;(check-equal? (evaluate
+(check-equal? (evaluate
               "(let ([a 1] [b 2] [c 3] [d 4] [e 5] [f 6] [g 8] [h 9])
                 (+ a b c d e f g h))") 45)
